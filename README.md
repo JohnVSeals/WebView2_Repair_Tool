@@ -28,8 +28,7 @@ Additionally, it **identifies and terminates parent processes running WebView2, 
 | **PowerShell 2.0**  | ❌ No | `$PSScriptRoot` and `Get-CimInstance` are not available. |
 
 ## Requirements
- 1. **Latest version of 'WebView2 Standalone installer'**
-    a. [Microsoft Developer Page](https://developer.microsoft.com/en-us/microsoft-edge/webview2)
+ 1. **Latest version of 'WebView2 Standalone installer'** : [Microsoft Developer Page](https://developer.microsoft.com/en-us/microsoft-edge/webview2)
 
 ## Usage
 
