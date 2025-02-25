@@ -72,7 +72,7 @@ foreach ($parent in $parentProcesses) {
 
 # Step 7: Cleanup older versions of WebView2
 # Get all folders in the WebView2 installation directory that follow a version number pattern
-$items = Get-Item -Path "C:\Program Files (x86)\Microsoft\EdgeWebView\Application\*" -ErrorAction SilentlyContinue | 
+$items = Get-Item -Path "${$env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application\*" -ErrorAction SilentlyContinue | 
     Where-Object { $_.Name -match '^\d+(\.\d+)+$' }  # Match version number folders
 
 # Find the highest version number (latest version)
