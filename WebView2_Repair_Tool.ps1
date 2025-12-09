@@ -9,9 +9,9 @@
 #   method is needed to ensure WebView2 is updated properly. Since WebView2 usually replaces itself during the normal update process, deploying a 
 #   newer version via SCCM will often fail because it detects that WebView2 is already installed. To work around this, we must install WebView2 side by side.
 #
-#   This script removes any registry entries pointing to the older version of WebView2, allowing the newer version to be installed. It then installs 
-#   the latest version from the script directory, terminates any parent process running WebView2, cleans up the older version, and restarts the terminated 
-#   parent processes. This process is entirely silent.
+#   This script removes image file execution option (IFEO) 'debugger' value and removes any registry entries pointing to the older version of WebView2, allowing 
+#   the newer version to be installed. It then installs the latest version from the script directory, terminates any parent process running WebView2, 
+#   cleans up the older version, and restarts the terminated parent processes. This process is entirely silent.
 #.NOTES
 #    File Name      : WebView2_Repair_Tool.ps1
 #    Author         : John Seals
@@ -21,25 +21,61 @@
 #   
 ###########################################################################################################################################################
 
-# Step 1: Uninstall WebView2 by removing its registry keys
+# Step 1: Remove IFEO "Debugger" stubs that silently block Edge/WebView2 installers
+#   Targets: msedge.exe, msedgewebview2.exe, MicrosoftEdgeUpdate.exe
+#   Behavior: remove only if the Debugger is a known blocker (e.g., systray.exe).
+#             To override and remove any Debugger, set $Env:WV2_FORCE_IFEO_FIX=1 before running.
+$ifeoBase   = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
+$targets    = @('msedge.exe','msedgewebview2.exe','MicrosoftEdgeUpdate.exe')
+$blockList  = @([IO.Path]::Combine($env:SystemRoot,'System32','systray.exe'))  # canonical path
+$force      = ($env:WV2_FORCE_IFEO_FIX -eq '1')
+
+# helper to normalize a Debugger string to its first executable path (expand env vars; strip quotes/args)
+function _Normalize-DebuggerPath([string]$s) {
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    $m = [regex]::Match($s, '^"([^"]+)"|^(\S+)')
+    $raw = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+    $expanded = [Environment]::ExpandEnvironmentVariables($raw)
+    try { (Resolve-Path -LiteralPath $expanded -ErrorAction Stop).Path } catch { $expanded }
+}
+
+foreach ($name in $targets) {
+    $key = Join-Path -Path $ifeoBase -ChildPath $name
+    if (Test-Path -LiteralPath $key) {
+        try {
+            $val = Get-ItemProperty -LiteralPath $key -Name 'Debugger' -ErrorAction SilentlyContinue
+            if ($null -ne $val) {
+                $dbgPath = _Normalize-DebuggerPath ($val.Debugger)
+                if ($force -or ($dbgPath -ne $null -and ($blockList -contains $dbgPath))) {
+                    Remove-ItemProperty -LiteralPath $key -Name 'Debugger' -ErrorAction SilentlyContinue
+                }
+                # else: leave legitimate debuggers (windbg, vsjitdebugger, etc.) untouched
+            }
+        } catch {
+            # intentional no-op; script remains fully silent
+        }
+    }
+}
+
+# Step 2: Uninstall WebView2 by removing its registry keys
 Get-ItemProperty -Path hklm:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\* | 
     Where-Object { $_.name -like "*WebView2*" } | Remove-Item -ErrorAction SilentlyContinue
 
-# Step 2: Determine the script's directory (compatible with all PowerShell versions)
+# Step 3: Determine the script's directory (compatible with all PowerShell versions)
 $scriptPath = $PSScriptRoot
 if (-not $scriptPath) {
     $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# Step 3: Define the path for the WebView2 installer (in the same folder as this script)
+# Step 4: Define the path for the WebView2 installer (in the same folder as this script)
 $installerPath = Join-Path -Path $scriptPath -ChildPath "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 
-# Step 4: Reinstall WebView2 using the installer if it exists
+# Step 5: Reinstall WebView2 using the installer if it exists
 if (Test-Path $installerPath) {
     Start-Process -FilePath $installerPath -ArgumentList "/silent /install" -NoNewWindow -Wait
 }
 
-# Step 5: Find all running WebView2 processes
+# Step 6: Find all running WebView2 processes
 $webviewProcesses = Get-CimInstance Win32_Process | Where-Object { $_.Name -match "msedgewebview2" } -ErrorAction SilentlyContinue
 
 # Initialize an array to store parent processes before killing WebView2
@@ -65,14 +101,14 @@ foreach ($process in $webviewProcesses) {
     }
 }
 
-# Step 6: Kill Parent Processes (only if they are not in the excluded list)
+# Step 7: Kill Parent Processes (only if they are not in the excluded list)
 foreach ($parent in $parentProcesses) {
     Stop-Process -Id $parent.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-# Step 7: Cleanup older versions of WebView2
+# Step 8: Cleanup older versions of WebView2
 # Get all folders in the WebView2 installation directory that follow a version number pattern
-$items = Get-Item -Path "${$env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application\*" -ErrorAction SilentlyContinue | 
+$items = Get-Item -Path "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application\*" -ErrorAction SilentlyContinue | 
     Where-Object { $_.Name -match '^\d+(\.\d+)+$' }  # Match version number folders
 
 # Find the highest version number (latest version)
@@ -83,7 +119,7 @@ $items | Where-Object { $_.FullName -ne $latestVersion.FullName } | ForEach-Obje
     Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Step 8: Restart Parent Processes AFTER Cleanup (No CMD Window)
+# Step 9: Restart Parent Processes AFTER Cleanup (No CMD Window)
 foreach ($parent in $parentProcesses) {
     if ($parent.CommandLine) {
         # Restart the parent process using its original command line, hidden from the user
